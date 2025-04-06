@@ -1,0 +1,59 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Student {
+  id        Int               @id @default(autoincrement())
+  username  String            @unique
+  password  String
+  fullName  String?
+  createdAt DateTime          @default(now())
+  scores    Score[]           @relation("StudentScores")
+  sessions  StudentExamSession[] @relation("StudentSessions")
+}
+
+model Exam {
+  id        Int        @id @default(autoincrement())
+  title     String     @unique
+  duration  Int        @default(30) // Duration in minutes
+  createdAt DateTime   @default(now())
+  questions Question[] @relation("ExamQuestions")
+  scores    Score[]    @relation("ExamScores")
+  sessions  StudentExamSession[] @relation("ExamSessions")
+}
+
+model Question {
+  id        Int      @id @default(autoincrement())
+  examId    Int
+  exam      Exam     @relation("ExamQuestions", fields: [examId], references: [id], onDelete: Cascade)
+  text      String
+  options   Json
+  correct   Int
+  createdAt DateTime @default(now())
+}
+
+model Score {
+  id        Int      @id @default(autoincrement())
+  studentId Int
+  student   Student  @relation("StudentScores", fields: [studentId], references: [id], onDelete: Cascade)
+  examId    Int
+  exam      Exam     @relation("ExamScores", fields: [examId], references: [id], onDelete: Cascade)
+  score     Float
+  createdAt DateTime @default(now())
+}
+
+model StudentExamSession {
+  id            Int      @id @default(autoincrement())
+  studentId     Int
+  student       Student  @relation("StudentSessions", fields: [studentId], references: [id], onDelete: Cascade) // Fixed syntax by removing the pipe symbol
+  examId        Int
+  exam          Exam     @relation("ExamSessions", fields: [examId], references: [id], onDelete: Cascade)
+  shuffledOrder Json
+  startedAt     DateTime @default(now())
+  completedAt   DateTime?
+}
