@@ -1,10 +1,16 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 
-export async function GET(request: Request, { params }: { params: { examId: string } }) {
+// GET handler to fetch an exam by ID
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { [key: string]: string } }
+) {
   try {
+    // Convert examId from string to integer
     const examId = parseInt(params.examId);
 
+    // Validate examId
     if (isNaN(examId)) {
       return NextResponse.json(
         { error: 'Invalid exam ID' },
@@ -12,11 +18,13 @@ export async function GET(request: Request, { params }: { params: { examId: stri
       );
     }
 
+    // Fetch the exam with its questions
     const exam = await prisma.exam.findUnique({
       where: { id: examId },
       include: { questions: true },
     });
 
+    // Check if exam exists
     if (!exam) {
       return NextResponse.json(
         { error: 'Exam not found' },
@@ -31,15 +39,19 @@ export async function GET(request: Request, { params }: { params: { examId: stri
       { error: error.message || 'Error fetching exam' },
       { status: 500 }
     );
-  } finally {
-    await prisma.$disconnect();
   }
 }
 
-export async function DELETE(request: Request, { params }: { params: { examId: string } }) {
+// DELETE handler to delete an exam by ID
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { [key: string]: string } }
+) {
   try {
+    // Convert examId from string to integer
     const examId = parseInt(params.examId);
 
+    // Validate examId
     if (isNaN(examId)) {
       return NextResponse.json(
         { error: 'Invalid exam ID' },
@@ -49,9 +61,7 @@ export async function DELETE(request: Request, { params }: { params: { examId: s
 
     // Delete the exam (associated scores and questions will be deleted via cascade)
     await prisma.exam.delete({
-      where: {
-        id: examId,
-      },
+      where: { id: examId },
     });
 
     return NextResponse.json(
@@ -64,7 +74,5 @@ export async function DELETE(request: Request, { params }: { params: { examId: s
       { error: error.message || 'Error deleting exam' },
       { status: 500 }
     );
-  } finally {
-    await prisma.$disconnect();
   }
 }
