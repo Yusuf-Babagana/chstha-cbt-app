@@ -1,409 +1,317 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { BookOpen, Clock, LogOut, Menu, X, Send } from 'lucide-react';
-import { use } from 'react';
+import { BookOpen, CheckCircle2, ChevronLeft, ChevronRight, Clock, Send } from 'lucide-react';
+import { Alert, Footer, Header, Spinner, primaryBtn } from '@/components/Shell';
+import { errMsg } from '@/lib/utils';
 
-export default function ExamPage({ params: paramsPromise }: { params: Promise<{ examId: string }> }) {
-  const params = use(paramsPromise);
+type Question = { id: number; text: string; options: string[] };
+type Result = { score: number; correct: number; total: number };
+
+const formatTime = (s: number) => {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const mm = String(m).padStart(2, '0');
+  const ss = String(sec).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+};
+
+export default function ExamPage({ params }: { params: Promise<{ examId: string }> }) {
+  const { examId } = use(params);
   const router = useRouter();
-  const [exam, setExam] = useState<any>(null);
-  const [questions, setQuestions] = useState<any[]>([]);
-  const [sessionId, setSessionId] = useState<number | null>(null); // Added to track the exam session
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+
+  const [title, setTitle] = useState('');
+  const [questions, setQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<number[]>([]);
-  const [timeLeft, setTimeLeft] = useState<number>(0);
-  const [isLoading, setIsLoading] = useState(true);
+  const [current, setCurrent] = useState(0);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [hasTakenExam, setHasTakenExam] = useState(false);
-  const [message, setMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<Result | null>(null);
+  const [autoSubmitted, setAutoSubmitted] = useState(false);
 
-  // Fetch exam details using the session endpoint and check if the student has already taken the exam
+  const answersRef = useRef<number[]>([]);
+  const endAtRef = useRef(0);
+  const submittingRef = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const finished = result !== null;
+
+  // Start or resume the attempt.
   useEffect(() => {
-    const startExamSession = async () => {
-      setIsLoading(true);
-      setError('');
+    (async () => {
       try {
-        const studentId = localStorage.getItem('studentId');
-        if (!studentId) {
-          setError('Please log in to take the exam.');
-          setTimeout(() => router.push('/student/login'), 2000);
-          return;
-        }
-
-        // Check if the student has already taken the exam
-        const scoreRes = await fetch(`/api/scores/check?examId=${params.examId}&studentId=${studentId}`);
-        if (!scoreRes.ok) {
-          const scoreData = await scoreRes.json();
-          throw new Error(scoreData.error || 'Failed to check exam status');
-        }
-        const scoreData = await scoreRes.json();
-        if (scoreData.hasTaken) {
-          setHasTakenExam(true);
+        const res = await fetch(`/api/student/exams/${examId}/start`, { method: 'POST' });
+        if (res.status === 401) return router.push('/student/login');
+        const data = await res.json();
+        if (res.status === 409 && data.alreadyTaken) {
           setError('You have already taken this exam.');
+          setResult(data.result);
+          setTitle('');
           return;
         }
+        if (!res.ok) throw new Error(data.error || 'Error starting exam');
+        setTitle(data.title);
+        if (data.finished) {
+          setAutoSubmitted(true);
+          setResult(data.result);
+          return;
+        }
+        setQuestions(data.questions);
+        setAnswers(data.answers);
+        answersRef.current = data.answers;
+        endAtRef.current = Date.now() + data.remainingSeconds * 1000;
+        setTimeLeft(data.remainingSeconds);
+      } catch (err) {
+        setError(errMsg(err, 'Failed to connect to the server. Please try again.'));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [examId, router]);
 
-        // Start the exam session to get the shuffled questions
-        const res = await fetch('/api/exam-session/start', {
+  const submit = useCallback(
+    async (auto = false) => {
+      if (submittingRef.current) return;
+      submittingRef.current = true;
+      setSubmitting(true);
+      setError('');
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      try {
+        const res = await fetch(`/api/student/exams/${examId}/submit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            studentId: parseInt(studentId),
-            examId: parseInt(params.examId),
-          }),
+          body: JSON.stringify({ answers: answersRef.current }),
         });
-
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || 'Error starting exam session');
-        }
-
-        setExam(data.exam);
-        setSessionId(data.sessionId); // Store the session ID
-        const parsedQuestions = data.exam.questions.map((question: any) => ({
-          ...question,
-          options: typeof question.options === 'string' ? JSON.parse(question.options) : question.options,
-        }));
-        setQuestions(parsedQuestions || []);
-        setTimeLeft(data.exam.duration * 60);
-        setAnswers(new Array(data.exam.questions.length).fill(-1));
-      } catch (err: any) {
-        setError(err.message || 'Failed to connect to the server. Please try again.');
-      } finally {
-        setIsLoading(false);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Error submitting exam');
+        setAutoSubmitted(auto);
+        setResult(data.result);
+      } catch (err) {
+        setError(`${errMsg(err, 'Could not submit.')} Your answers are saved - please try submitting again.`);
+        submittingRef.current = false;
+        setSubmitting(false);
       }
-    };
+    },
+    [examId]
+  );
 
-    startExamSession();
-  }, [params.examId, router]);
-
-  // Timer logic
+  // Countdown based on an absolute end time, so it stays accurate if the tab is throttled.
   useEffect(() => {
-    if (timeLeft <= 0 || !exam || hasTakenExam) return;
+    if (timeLeft === null || finished) return;
+    const tick = setInterval(() => {
+      const left = Math.max(0, Math.round((endAtRef.current - Date.now()) / 1000));
+      setTimeLeft(left);
+      if (left === 0) {
+        clearInterval(tick);
+        submit(true);
+      }
+    }, 500);
+    return () => clearInterval(tick);
+  }, [timeLeft === null, finished, submit]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          handleSubmit();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [timeLeft, exam, hasTakenExam]);
-
-  // Prevent navigation away without confirmation
+  // Warn before leaving mid-exam.
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!hasTakenExam && !isSubmitting) {
-        e.preventDefault();
-        e.returnValue = 'You have an ongoing exam. Are you sure you want to leave?';
-      }
+    if (finished || questions.length === 0) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
     };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [finished, questions.length]);
 
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [hasTakenExam, isSubmitting]);
-
-  // Handle answer selection
-  const handleAnswerChange = (questionIndex: number, optionIndex: number) => {
-    const newAnswers = [...answers];
-    newAnswers[questionIndex] = optionIndex;
-    setAnswers(newAnswers);
-  };
-
-  // Navigate to the next question
-  const handleNextQuestion = () => {
-    if (currentQuestionIndex < questions.length - 1) {
-      setCurrentQuestionIndex(currentQuestionIndex + 1);
-    }
-  };
-
-  // Navigate to the previous question
-  const handlePreviousQuestion = () => {
-    if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(currentQuestionIndex - 1);
-    }
-  };
-
-  // Submit the exam
-  const handleSubmit = async () => {
-    if (isSubmitting || hasTakenExam) return;
-
-    setIsSubmitting(true);
-    setError('');
-    setMessage('');
-
-    try {
-      const studentId = localStorage.getItem('studentId');
-      if (!studentId) {
-        throw new Error('Please log in to submit the exam.');
-      }
-
-      if (!sessionId) {
-        throw new Error('Exam session not found. Please restart the exam.');
-      }
-
-      const res = await fetch('/api/scores', {
-        method: 'POST',
+  const selectAnswer = (index: number, option: number) => {
+    const next = [...answersRef.current];
+    next[index] = option;
+    answersRef.current = next;
+    setAnswers(next);
+    // Debounced autosave so a refresh or crash keeps progress.
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      fetch(`/api/student/exams/${examId}/answers`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          examId: parseInt(params.examId),
-          studentId: parseInt(studentId),
-          sessionId, // Include the session ID
-          answers, // Answers are in the shuffled order
-        }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Error submitting exam');
-      }
-
-      setMessage('Your exam is submitted.');
-      setTimeout(() => {
-        localStorage.removeItem('studentId'); // Log out the student
-        router.push('/student/login');
-      }, 2000);
-    } catch (err: any) {
-      setError(err.message || 'Failed to connect to the server. Please try again.');
-    } finally {
-      setIsSubmitting(false);
-    }
+        body: JSON.stringify({ answers: answersRef.current }),
+      }).catch(() => {});
+    }, 600);
   };
 
-  // Handle logout with confirmation
-  const handleLogout = () => {
-    const confirmLogout = window.confirm(
-      'You have an ongoing exam. Are you sure you want to log out? Your progress will be lost.'
-    );
-    if (confirmLogout) {
-      setIsSidebarOpen(false);
-      localStorage.removeItem('studentId');
-      router.push('/student/login');
-    }
+  const confirmSubmit = () => {
+    const unanswered = answers.filter((a) => a < 0).length;
+    const msg = unanswered
+      ? `You have ${unanswered} unanswered question(s). Submit anyway?`
+      : 'Submit your exam now? You cannot change your answers afterwards.';
+    if (window.confirm(msg)) submit(false);
   };
 
-  // Format time left
-  const formatTime = (seconds: number) => {
-    const minutes = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
+  const logout = async () => {
+    if (!finished && !window.confirm('Your exam timer keeps running while you are logged out. Log out anyway?')) return;
+    await fetch('/api/student/logout', { method: 'POST' });
+    router.push('/student/login');
+    router.refresh();
   };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <p className="text-gray-600">Loading exam...</p>
+  const shell = (children: React.ReactNode) => (
+    <div className="flex min-h-screen flex-col">
+      <Header>
+        <button onClick={logout} className="text-sm hover:underline">
+          Logout
+        </button>
+      </Header>
+      <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">{children}</main>
+      <Footer />
+    </div>
+  );
+
+  if (loading) return shell(<Spinner label="Loading exam..." />);
+
+  if (finished && result) {
+    const pass = result.score >= 50;
+    return shell(
+      <div className="mx-auto max-w-lg rounded-xl bg-white p-8 text-center shadow-lg">
+        <CheckCircle2 className="mx-auto mb-3 text-emerald-600" size={48} />
+        <h1 className="text-2xl font-bold text-gray-900">{error ? 'Exam already completed' : 'Exam submitted'}</h1>
+        {title && <p className="mt-1 text-gray-600">{title}</p>}
+        {autoSubmitted && !error && <p className="mt-3 text-sm text-amber-700">Time ran out, so your saved answers were submitted automatically.</p>}
+        <div className={`mt-6 text-5xl font-bold ${pass ? 'text-emerald-700' : 'text-red-600'}`}>{result.score.toFixed(1)}%</div>
+        <p className="mt-2 text-gray-600">
+          {result.correct} of {result.total} questions correct
+        </p>
+        <Link href="/student/exam" className={`${primaryBtn} mt-8`}>
+          Back to exams
+        </Link>
       </div>
     );
   }
 
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <p className="text-red-600">{error}</p>
+  if (questions.length === 0) {
+    return shell(
+      <div className="space-y-4">
+        <Alert kind="error">{error || 'This exam is not available.'}</Alert>
+        <Link href="/student/exam" className="text-emerald-700 hover:underline">
+          &larr; Back to exams
+        </Link>
       </div>
     );
   }
 
-  if (!exam || questions.length === 0) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <p className="text-gray-600">Exam not found or no questions available.</p>
-      </div>
-    );
-  }
-
-  if (hasTakenExam) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <p className="text-red-600">{error}</p>
-      </div>
-    );
-  }
-
-  const currentQuestion = questions[currentQuestionIndex];
+  const q = questions[current];
+  const lowTime = (timeLeft ?? 0) <= 60;
+  const answeredCount = answers.filter((a) => a >= 0).length;
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col">
-      {/* Header */}
-      <header className="bg-blue-600 text-white p-6 shadow-md">
-        <div className="max-w-7xl mx-auto flex justify-between items-center">
-          <Link href="/" className="text-2xl font-bold hover:underline">
-            CBT Platform
-          </Link>
-          <nav className="hidden md:flex space-x-6">
-            <Link href="/student/exam" className="text-lg hover:underline">
-              Available Exams
-            </Link>
-            <button
-              onClick={handleLogout}
-              className="text-lg hover:underline flex items-center space-x-2"
-            >
-              <LogOut size={20} />
-              <span>Logout</span>
-            </button>
-          </nav>
-          {/* Hamburger Menu for Mobile */}
-          <button
-            className="md:hidden text-white focus:outline-none"
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+    <div className="flex min-h-screen flex-col">
+      <header className="sticky top-0 z-10 bg-emerald-800 text-white shadow">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <BookOpen size={20} className="shrink-0" />
+            <h1 className="truncate font-semibold">{title}</h1>
+          </div>
+          <div
+            className={`flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 font-mono text-lg font-semibold ${
+              lowTime ? 'animate-pulse bg-red-600' : 'bg-emerald-900'
+            }`}
+            aria-label="Time remaining"
           >
-            {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
-          </button>
+            <Clock size={18} /> {formatTime(timeLeft ?? 0)}
+          </div>
         </div>
       </header>
 
-      {/* Mobile Sidebar */}
-      <aside
-        className={`bg-gray-800 text-white w-64 p-6 space-y-4 fixed inset-y-0 right-0 transform ${
-          isSidebarOpen ? 'translate-x-0' : 'translate-x-full'
-        } md:hidden transition-transform duration-300 ease-in-out z-20`}
-      >
-        <h2 className="text-xl font-semibold mb-6">Student Menu</h2>
-        <Link
-          href="/student/exam"
-          className="block py-3 px-4 rounded-md text-gray-300 hover:bg-gray-700 hover:text-white transition duration-200"
-          onClick={() => setIsSidebarOpen(false)}
-        >
-          Available Exams
-        </Link>
-        <button
-          onClick={handleLogout}
-          className="w-full flex items-center space-x-3 py-3 px-4 rounded-md text-gray-300 hover:bg-gray-700 hover:text-white transition duration-200"
-        >
-          <LogOut size={20} />
-          <span>Logout</span>
-        </button>
-      </aside>
-
-      {/* Overlay for mobile sidebar */}
-      {isSidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black opacity-50 md:hidden z-10"
-          onClick={() => setIsSidebarOpen(false)}
-        />
-      )}
-
-      {/* Main Content */}
-      <main className="flex-1 p-8">
-        <div className="max-w-3xl mx-auto">
-          {/* Exam Header */}
-          <div className="bg-white p-6 rounded-lg shadow-md mb-6">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center space-x-3">
-                <BookOpen className="text-blue-600" size={24} />
-                <h1 className="text-2xl font-semibold text-gray-800">
-                  {exam.title}
-                </h1>
-              </div>
-              <div className="flex items-center space-x-2 text-gray-600">
-                <Clock size={18} />
-                <p>Time Left: {formatTime(timeLeft)}</p>
-              </div>
-            </div>
-            <p className="text-gray-600">
-              Question {currentQuestionIndex + 1} of {questions.length}
+      <main className="mx-auto grid w-full max-w-6xl flex-1 gap-6 px-4 py-6 lg:grid-cols-[1fr_260px]">
+        <section>
+          <div className="rounded-xl bg-white p-6 shadow-sm">
+            <p className="mb-2 text-sm font-medium text-emerald-700">
+              Question {current + 1} of {questions.length}
             </p>
-          </div>
-
-          {/* Question Card */}
-          <div className="bg-white p-6 rounded-lg shadow-md">
-            <h2 className="text-lg font-medium text-gray-800 mb-4">
-              {currentQuestion.text}
-            </h2>
-            <div className="space-y-3">
-              {Array.isArray(currentQuestion.options) ? (
-                currentQuestion.options.map((option: string, index: number) => (
+            <h2 className="mb-5 whitespace-pre-wrap text-lg font-medium text-gray-900">{q.text}</h2>
+            <div className="space-y-3" role="radiogroup">
+              {q.options.map((option, i) => {
+                const selected = answers[current] === i;
+                return (
                   <label
-                    key={index}
-                    className="flex items-center space-x-3 p-3 rounded-md border border-gray-200 hover:bg-gray-50 transition duration-200"
+                    key={i}
+                    className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition ${
+                      selected ? 'border-emerald-600 bg-emerald-50' : 'border-gray-200 hover:bg-gray-50'
+                    }`}
                   >
                     <input
                       type="radio"
-                      name={`question-${currentQuestionIndex}`}
-                      value={index}
-                      checked={answers[currentQuestionIndex] === index}
-                      onChange={() => handleAnswerChange(currentQuestionIndex, index)}
-                      className="h-5 w-5 text-blue-600 focus:ring-blue-500"
-                      disabled={isSubmitting}
+                      name={`q-${q.id}`}
+                      checked={selected}
+                      onChange={() => selectAnswer(current, i)}
+                      disabled={submitting}
+                      className="mt-1 h-4 w-4 accent-emerald-700"
                     />
-                    <span className="text-gray-700">{option}</span>
+                    <span className="text-gray-800">
+                      <span className="mr-2 font-semibold">{String.fromCharCode(65 + i)}.</span>
+                      {option}
+                    </span>
                   </label>
-                ))
-              ) : (
-                <p className="text-red-600">Error: Question options are not available.</p>
-              )}
+                );
+              })}
             </div>
           </div>
 
-          {/* Navigation Buttons */}
-          <div className="flex justify-between mt-6">
+          {error && (
+            <div className="mt-4">
+              <Alert kind="error">{error}</Alert>
+            </div>
+          )}
+
+          <div className="mt-5 flex justify-between gap-3">
             <button
-              onClick={handlePreviousQuestion}
-              disabled={currentQuestionIndex === 0 || isSubmitting}
-              className={`px-4 py-2 rounded-md text-white transition duration-200 ${
-                currentQuestionIndex === 0 || isSubmitting
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700'
-              }`}
+              onClick={() => setCurrent((c) => c - 1)}
+              disabled={current === 0 || submitting}
+              className={primaryBtn}
             >
-              Previous
+              <ChevronLeft size={18} /> Previous
             </button>
-            {currentQuestionIndex === questions.length - 1 ? (
-              <button
-                onClick={handleSubmit}
-                disabled={isSubmitting}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-md text-white transition duration-200 ${
-                  isSubmitting
-                    ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-green-600 hover:bg-green-700'
-                }`}
-              >
-                <Send size={18} />
-                <span>{isSubmitting ? 'Submitting...' : 'Submit Exam'}</span>
+            {current === questions.length - 1 ? (
+              <button onClick={confirmSubmit} disabled={submitting} className={`${primaryBtn} !bg-amber-600 hover:!bg-amber-700`}>
+                <Send size={18} /> {submitting ? 'Submitting...' : 'Submit Exam'}
               </button>
             ) : (
-              <button
-                onClick={handleNextQuestion}
-                disabled={isSubmitting}
-                className={`px-4 py-2 rounded-md text-white transition duration-200 ${
-                  isSubmitting
-                    ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-blue-600 hover:bg-blue-700'
-                }`}
-              >
-                Next
+              <button onClick={() => setCurrent((c) => c + 1)} disabled={submitting} className={primaryBtn}>
+                Next <ChevronRight size={18} />
               </button>
             )}
           </div>
+        </section>
 
-          {message && (
-            <p className="text-green-600 text-center mt-4">{message}</p>
-          )}
-          {error && (
-            <p className="text-red-600 text-center mt-4">{error}</p>
-          )}
-        </div>
-      </main>
-
-      {/* Footer */}
-      <footer className="bg-gray-800 text-white p-4">
-        <div className="max-w-7xl mx-auto text-center">
-          <p className="text-sm">
-            © {new Date().getFullYear()} CBT Platform. All rights reserved.
+        <aside className="h-fit rounded-xl bg-white p-4 shadow-sm lg:sticky lg:top-20">
+          <h3 className="mb-1 font-semibold text-gray-900">Question navigator</h3>
+          <p className="mb-3 text-xs text-gray-500">
+            {answeredCount} of {questions.length} answered
           </p>
-        </div>
-      </footer>
+          <div className="grid grid-cols-6 gap-2 sm:grid-cols-10 lg:grid-cols-5">
+            {questions.map((_, i) => (
+              <button
+                key={i}
+                onClick={() => setCurrent(i)}
+                aria-label={`Go to question ${i + 1}`}
+                className={`h-9 rounded text-sm font-medium ${
+                  i === current
+                    ? 'bg-emerald-700 text-white'
+                    : answers[i] >= 0
+                      ? 'bg-emerald-100 text-emerald-900'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                {i + 1}
+              </button>
+            ))}
+          </div>
+          <button onClick={confirmSubmit} disabled={submitting} className={`${primaryBtn} mt-4 w-full`}>
+            <Send size={16} /> Finish &amp; Submit
+          </button>
+        </aside>
+      </main>
     </div>
   );
 }

@@ -1,92 +1,79 @@
-'use client';
-
 import Link from 'next/link';
+import { ClipboardCheck, GraduationCap, ShieldCheck, Timer } from 'lucide-react';
+import { Footer, Header, Logo } from '@/components/Shell';
+import { COLLEGE_NAME } from '@/lib/brand';
+
+const features = [
+  {
+    icon: Timer,
+    title: 'Timed examinations',
+    text: 'A server-synchronised countdown keeps every candidate on the same clock, even after a refresh.',
+  },
+  {
+    icon: ClipboardCheck,
+    title: 'Instant results',
+    text: 'Objective questions are marked automatically and scores are available the moment an exam ends.',
+  },
+  {
+    icon: ShieldCheck,
+    title: 'Secure and fair',
+    text: 'Questions are shuffled per candidate and the answer key never leaves the server.',
+  },
+];
 
 export default function HomePage() {
   return (
-    <div className="min-h-screen flex flex-col relative bg-gray-100">
-      {/* Background Image with Overlay */}
-      <div
-        className="absolute inset-0 bg-cover bg-center"
-        style={{
-          backgroundImage: `url('https://images.unsplash.com/photo-1550831107-1553da8c8464?ixlib=rb-4.0.3&auto=format&fit=crop&w=1350&q=80')`, // Replace with your own image URL or place an image in /public
-          backgroundAttachment: 'fixed',
-        }}
-      >
-        <div className="absolute inset-0 bg-white bg-opacity-80"></div> {/* Semi-transparent overlay */}
-      </div>
+    <div className="flex min-h-screen flex-col">
+      <Header>
+        <nav className="flex items-center gap-5 text-sm">
+          <Link href="/student/login" className="hover:underline">
+            Student Login
+          </Link>
+          <Link href="/admin/login" className="hover:underline">
+            Admin Login
+          </Link>
+        </nav>
+      </Header>
 
-      {/* Header Section */}
-      <header className="bg-blue-600 text-white p-6 shadow-md relative z-10">
-        <div className="max-w-6xl mx-auto flex justify-between items-center">
-          <h1 className="text-3xl font-bold">CHSTH Hadejia</h1>
-          <nav className="space-x-6">
-            <Link href="/student" className="text-lg hover:underline">
-              Student Login
-            </Link>
-            <Link href="/admin" className="text-lg hover:underline">
-              Admin Login
-            </Link>
-            <Link href="/admin/dashboard" className="text-lg hover:underline">
-              Admin Dashboard
-            </Link>
-          </nav>
-        </div>
-      </header>
-
-      {/* Hero Section */}
-      <main className="flex-grow flex items-center justify-center p-8 relative z-10">
-        <div className="max-w-4xl mx-auto text-center">
-          <h2 className="text-5xl font-bold text-gray-800 mb-6">
-            Total Health Care Solution
-          </h2>
-          <p className="text-lg text-gray-700 mb-6">
-            Welcome To College Of Health Science and Technology Hadejia. Committed to providing high-quality education, fostering innovation, and supporting our students and faculty in their pursuit of excellence.
-          </p>
-          <p className="text-md text-gray-600 mb-4">
-            <strong>Mission:</strong> To fill identified gaps and add value to the content and quality of training given to health care providers and professionals who will provide quality service to their communities with sound professional skills and competence for the development of their communities and satisfaction of their employer.
-          </p>
-          <p className="text-md text-gray-600 mb-8">
-            <strong>Vision:</strong> To ensure the maintenance of a health care delivery workforce that will implement government health policies with confidence and skills needed for service delivery by creating demand for such services.
-          </p>
-          <div className="flex justify-center space-x-4">
-            <Link href="/student">
-              <button className="bg-blue-600 text-white px-8 py-3 rounded-md hover:bg-blue-700 transition duration-200 text-lg font-medium">
-                Student Login
-              </button>
-            </Link>
-            <Link href="/admin/dashboard">
-              <button className="bg-green-600 text-white px-8 py-3 rounded-md hover:bg-green-700 transition duration-200 text-lg font-medium">
-                Admin Dashboard
-              </button>
-            </Link>
+      <main className="flex-1">
+        <section className="bg-gradient-to-b from-emerald-800 to-emerald-700 px-4 py-16 text-center text-white">
+          <div className="mx-auto max-w-3xl">
+            <Logo className="mx-auto mb-5 h-20 w-20" />
+            <h1 className="text-3xl font-bold sm:text-4xl">{COLLEGE_NAME}</h1>
+            <p className="mt-3 text-xl text-emerald-100">Computer-Based Test (CBT) Portal</p>
+            <p className="mx-auto mt-4 max-w-xl text-emerald-50/90">
+              Sit your examinations online and see your results immediately. Exam officers can manage students, tests
+              and scores from one place.
+            </p>
+            <div className="mt-8 flex flex-wrap justify-center gap-4">
+              <Link
+                href="/student/login"
+                className="inline-flex items-center gap-2 rounded-md bg-white px-6 py-3 font-semibold text-emerald-800 shadow hover:bg-emerald-50"
+              >
+                <GraduationCap size={20} /> Student Login
+              </Link>
+              <Link
+                href="/admin/login"
+                className="inline-flex items-center gap-2 rounded-md border border-white/70 px-6 py-3 font-semibold text-white hover:bg-white/10"
+              >
+                <ShieldCheck size={20} /> Admin Login
+              </Link>
+            </div>
           </div>
-        </div>
+        </section>
+
+        <section className="mx-auto grid max-w-5xl gap-6 px-4 py-14 sm:grid-cols-3">
+          {features.map(({ icon: Icon, title, text }) => (
+            <div key={title} className="rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-100">
+              <Icon className="mb-3 text-emerald-700" size={28} />
+              <h2 className="font-semibold text-gray-900">{title}</h2>
+              <p className="mt-1 text-sm text-gray-600">{text}</p>
+            </div>
+          ))}
+        </section>
       </main>
 
-      {/* Floating Sidebar (Simplified) */}
-      <aside className="hidden lg:block fixed right-0 top-1/2 transform -translate-y-1/2 bg-blue-800 text-white p-4 rounded-l-lg shadow-lg z-20">
-        <div className="flex flex-col space-y-4">
-          <button className="flex items-center space-x-2 hover:bg-blue-700 p-2 rounded">
-            <span className="text-sm">Home</span>
-          </button>
-          <button className="flex items-center space-x-2 hover:bg-blue-700 p-2 rounded">
-            <span className="text-sm">Info</span>
-          </button>
-          <button className="flex items-center space-x-2 hover:bg-blue-700 p-2 rounded">
-            <span className="text-sm">Manage</span>
-          </button>
-        </div>
-      </aside>
-
-      {/* Footer Section */}
-      <footer className="bg-gray-800 text-white p-4 relative z-10">
-        <div className="max-w-6xl mx-auto text-center">
-          <p className="text-sm">
-            © {new Date().getFullYear()} College of Health Science and Technology Hadejia. All rights reserved.
-          </p>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }

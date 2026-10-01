@@ -1,126 +1,75 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { parse } from 'csv-parse/sync';
+import { getAdmin, serverError, unauthorized } from '@/lib/auth';
+import { parseQuestionsCsv } from '@/lib/csv';
 
 export async function GET() {
+  if (!(await getAdmin())) return unauthorized();
   try {
     const exams = await prisma.exam.findMany({
-      include: {
-        questions: true,
+      select: {
+        id: true,
+        title: true,
+        duration: true,
+        createdAt: true,
+        _count: { select: { questions: true, scores: true } },
       },
+      orderBy: { createdAt: 'desc' },
     });
-
-    return NextResponse.json(exams, { status: 200 });
-  } catch (error: any) {
-    console.error('Fetch exams error:', error.message);
-    return NextResponse.json(
-      { error: error.message || 'Error fetching exams' },
-      { status: 500 }
-    );
-  } finally {
-    await prisma.$disconnect();
+    return NextResponse.json(exams);
+  } catch (e) {
+    return serverError('Fetch exams error', e, 'Error fetching exams');
   }
 }
 
 export async function POST(request: Request) {
+  if (!(await getAdmin())) return unauthorized();
   try {
-    const formData = await request.formData();
-    const title = formData.get('title') as string;
-    const duration = parseInt(formData.get('duration') as string);
-    const questionsFile = formData.get('questions') as File;
+    const form = await request.formData();
+    const title = String(form.get('title') ?? '').trim();
+    const duration = parseInt(String(form.get('duration') ?? ''), 10);
+    const file = form.get('questions');
 
-    if (!title || !duration || !questionsFile) {
+    if (!title || !Number.isInteger(duration) || duration < 1 || duration > 600 || !(file instanceof File)) {
       return NextResponse.json(
-        { error: 'Title, duration, and questions file are required' },
+        { error: 'A title, a duration (1-600 minutes) and a questions CSV file are required' },
         { status: 400 }
       );
     }
 
-    const questionsText = await questionsFile.text();
-    const questionsData = parse(questionsText, {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-    });
-
-    if (questionsData.length === 0) {
+    let parsed;
+    try {
+      parsed = parseQuestionsCsv(await file.text());
+    } catch {
+      return NextResponse.json({ error: 'Could not read the CSV file. Check that it is a valid CSV.' }, { status: 400 });
+    }
+    if (parsed.errors.length > 0 || parsed.questions.length === 0) {
+      const first = parsed.errors
+        .slice(0, 5)
+        .map((e) => `row ${e.row}: ${e.message}`)
+        .join('; ');
+      const more = parsed.errors.length > 5 ? ` (and ${parsed.errors.length - 5} more)` : '';
       return NextResponse.json(
-        { error: 'Questions CSV file is empty or invalid' },
+        {
+          error:
+            parsed.errors.length === 0
+              ? 'The CSV file has no questions.'
+              : `Fix these CSV problems and upload again - ${first}${more}`,
+        },
         { status: 400 }
       );
     }
 
-    const questions = questionsData.map((row: any) => ({
-      text: row.text,
-      options: [row.option1, row.option2, row.option3, row.option4],
-      correct: parseInt(row.correct),
-    }));
+    if (await prisma.exam.findUnique({ where: { title } })) {
+      return NextResponse.json({ error: 'An exam with this title already exists' }, { status: 409 });
+    }
 
     const exam = await prisma.exam.create({
-      data: {
-        title,
-        duration,
-        questions: {
-          create: questions,
-        },
-      },
-      include: {
-        questions: true,
-      },
+      data: { title, duration, questions: { create: parsed.questions } },
+      select: { id: true, title: true, duration: true, _count: { select: { questions: true } } },
     });
-
-    return NextResponse.json(
-      { message: 'Exam created successfully', exam },
-      { status: 200 }
-    );
-  } catch (error: any) {
-    console.error('Create exam error:', error.message);
-    return NextResponse.json(
-      { error: error.message || 'Error creating exam' },
-      { status: 500 }
-    );
-  } finally {
-    await prisma.$disconnect();
-  }
-}
-
-export async function DELETE(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const examId = parseInt(searchParams.get('examId') || '0');
-
-    if (!examId) {
-      return NextResponse.json(
-        { error: 'Exam ID is required' },
-        { status: 400 }
-      );
-    }
-
-    // Delete associated scores first
-    await prisma.score.deleteMany({
-      where: {
-        examId,
-      },
-    });
-
-    // Delete the exam (this will also delete associated questions due to cascade)
-    await prisma.exam.delete({
-      where: {
-        id: examId,
-      },
-    });
-
-    return NextResponse.json(
-      { message: 'Exam deleted successfully' },
-      { status: 200 }
-    );
-  } catch (error: any) {
-    console.error('Delete exam error:', error.message);
-    return NextResponse.json(
-      { error: error.message || 'Error deleting exam' },
-      { status: 500 }
-    );
-  } finally {
-    await prisma.$disconnect();
+    return NextResponse.json({ message: 'Exam created successfully', exam });
+  } catch (e) {
+    return serverError('Create exam error', e, 'Error creating exam');
   }
 }

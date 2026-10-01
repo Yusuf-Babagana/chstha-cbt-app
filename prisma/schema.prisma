@@ -8,52 +8,59 @@ datasource db {
 }
 
 model Student {
-  id        Int               @id @default(autoincrement())
-  username  String            @unique
-  password  String
+  id        Int                  @id @default(autoincrement())
+  username  String               @unique // Matriculation / registration number
+  password  String               // bcrypt hash
   fullName  String?
-  createdAt DateTime          @default(now())
-  scores    Score[]           @relation("StudentScores")
-  sessions  StudentExamSession[] @relation("StudentSessions")
+  createdAt DateTime             @default(now())
+  scores    Score[]
+  sessions  StudentExamSession[]
 }
 
 model Exam {
-  id        Int        @id @default(autoincrement())
-  title     String     @unique
-  duration  Int        @default(30) // Duration in minutes
-  createdAt DateTime   @default(now())
-  questions Question[] @relation("ExamQuestions")
-  scores    Score[]    @relation("ExamScores")
-  sessions  StudentExamSession[] @relation("ExamSessions")
+  id        Int                  @id @default(autoincrement())
+  title     String               @unique
+  duration  Int                  @default(30) // Duration in minutes
+  createdAt DateTime             @default(now())
+  questions Question[]
+  scores    Score[]
+  sessions  StudentExamSession[]
 }
 
 model Question {
   id        Int      @id @default(autoincrement())
   examId    Int
-  exam      Exam     @relation("ExamQuestions", fields: [examId], references: [id], onDelete: Cascade)
+  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
   text      String
-  options   Json
-  correct   Int
+  options   Json     // string[]
+  correct   Int      // zero-based index into options
   createdAt DateTime @default(now())
 }
 
 model Score {
   id        Int      @id @default(autoincrement())
   studentId Int
-  student   Student  @relation("StudentScores", fields: [studentId], references: [id], onDelete: Cascade)
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
   examId    Int
-  exam      Exam     @relation("ExamScores", fields: [examId], references: [id], onDelete: Cascade)
-  score     Float
+  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  score     Float    // percentage, 0-100
+  correct   Int      @default(0)
+  total     Int      @default(0)
   createdAt DateTime @default(now())
+
+  @@unique([studentId, examId])
 }
 
 model StudentExamSession {
-  id            Int      @id @default(autoincrement())
+  id            Int       @id @default(autoincrement())
   studentId     Int
-  student       Student  @relation("StudentSessions", fields: [studentId], references: [id], onDelete: Cascade) // Fixed syntax by removing the pipe symbol
+  student       Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
   examId        Int
-  exam          Exam     @relation("ExamSessions", fields: [examId], references: [id], onDelete: Cascade)
-  shuffledOrder Json
-  startedAt     DateTime @default(now())
+  exam          Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
+  shuffledOrder Json      // question ids in the order shown to this student
+  answers       Json?     // saved answers (selected option index or -1), in shuffled order
+  startedAt     DateTime  @default(now())
   completedAt   DateTime?
+
+  @@index([studentId, examId])
 }

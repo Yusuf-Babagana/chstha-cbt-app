@@ -1,773 +1,612 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { Menu, X, UserPlus, Users, FileText, Eye, Download, LogOut, Trash2, Edit } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Download, FileText, KeyRound, LogOut, RotateCcw, Trash2, Users } from 'lucide-react';
+import { Alert, Footer, Header, Spinner, dangerBtn, inputClass, primaryBtn } from '@/components/Shell';
+import { errMsg } from '@/lib/utils';
 
-export default function AdminDashboard() {
-  const [activeSection, setActiveSection] = useState('register-student');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+type Student = { id: number; username: string; fullName: string | null; createdAt: string; _count: { scores: number } };
+type Exam = { id: number; title: string; duration: number; createdAt: string; _count: { questions: number; scores: number } };
+type Question = { id: number; text: string; options: string[]; correct: number };
+type Score = {
+  id: number;
+  score: number;
+  correct: number;
+  total: number;
+  createdAt: string;
+  student: { username: string; fullName: string | null };
+  exam: { title: string };
+};
+type Notice = { kind: 'error' | 'success'; text: string } | null;
 
-  // State for Register Student
-  const [studentUsername, setStudentUsername] = useState('');
-  const [studentPassword, setStudentPassword] = useState('');
-  const [studentFullName, setStudentFullName] = useState('');
-  const [isRegisterLoading, setIsRegisterLoading] = useState(false);
+const tabs = [
+  { id: 'students', label: 'Students', icon: Users },
+  { id: 'exams', label: 'Exams', icon: FileText },
+  { id: 'scores', label: 'Scores', icon: Download },
+] as const;
+type TabId = (typeof tabs)[number]['id'];
 
-  // State for Bulk Register
+/** fetch wrapper that sends the user back to login when the admin session has expired. */
+function useApi() {
+  const router = useRouter();
+  return useCallback(
+    async (url: string, init?: RequestInit) => {
+      const res = await fetch(url, init);
+      if (res.status === 401) {
+        router.push('/admin/login');
+        throw new Error('Your session has expired. Please log in again.');
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      return data;
+    },
+    [router]
+  );
+}
+
+const jsonInit = (method: string, body: unknown): RequestInit => ({
+  method,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+
+const fmtDate = (d: string) => new Date(d).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+
+function Card({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <section className="rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-100">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block text-sm font-medium text-gray-700">
+      {label}
+      {children}
+    </label>
+  );
+}
+
+const Th = ({ children }: { children?: React.ReactNode }) => (
+  <th className="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">{children}</th>
+);
+const Td = ({ children, className = '' }: { children?: React.ReactNode; className?: string }) => (
+  <td className={`px-3 py-2.5 text-sm text-gray-800 ${className}`}>{children}</td>
+);
+
+/* ------------------------------ Students ------------------------------ */
+
+function StudentsTab({ notify }: { notify: (n: Notice) => void }) {
+  const api = useApi();
+  const [students, setStudents] = useState<Student[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({ username: '', password: '', fullName: '' });
   const [bulkFile, setBulkFile] = useState<File | null>(null);
-  const [isBulkLoading, setIsBulkLoading] = useState(false);
+  const [bulkKey, setBulkKey] = useState(0);
 
-  // State for Create Exam
-  const [examTitle, setExamTitle] = useState('');
-  const [examDuration, setExamDuration] = useState('60');
-  const [examFile, setExamFile] = useState<File | null>(null);
-  const [isExamLoading, setIsExamLoading] = useState(false);
+  const load = useCallback(async () => {
+    try {
+      setStudents(await api('/api/student'));
+    } catch (e) {
+      notify({ kind: 'error', text: errMsg(e) });
+    } finally {
+      setLoading(false);
+    }
+  }, [api, notify]);
 
-  // State for Download Scores
-  const [isDownloadLoading, setIsDownloadLoading] = useState(false);
-
-  // State for Manage Exams
-  const [exams, setExams] = useState<any[]>([]);
-  const [isExamsLoading, setIsExamsLoading] = useState(true);
-
-  // State for Manage Questions
-  const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
-  const [questions, setQuestions] = useState<any[]>([]);
-  const [isQuestionsLoading, setIsQuestionsLoading] = useState(false);
-
-  const [message, setMessage] = useState('');
-
-  // Fetch all exams on page load
   useEffect(() => {
-    const fetchExams = async () => {
-      setIsExamsLoading(true);
-      setMessage('');
+    load();
+  }, [load]);
 
-      try {
-        const res = await fetch('/api/exams');
-        if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.error || 'Error fetching exams');
-        }
-        const data = await res.json();
-        setExams(data);
-      } catch (error: any) {
-        setMessage(error.message || 'Failed to fetch exams');
-      } finally {
-        setIsExamsLoading(false);
-      }
-    };
-
-    fetchExams();
-  }, []);
-
-  // Fetch questions when an exam is selected
-  useEffect(() => {
-    if (selectedExamId === null) {
-      setQuestions([]);
-      return;
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    notify(null);
+    try {
+      await fn();
+    } catch (e) {
+      notify({ kind: 'error', text: errMsg(e) });
+    } finally {
+      setBusy(false);
     }
+  };
 
-    const fetchQuestions = async () => {
-      setIsQuestionsLoading(true);
-      setMessage('');
-
-      try {
-        const res = await fetch(`/api/exams/${selectedExamId}`);
-        if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.error || 'Error fetching questions');
-        }
-        const data = await res.json();
-        const parsedQuestions = data.questions.map((question: any) => ({
-          ...question,
-          options: typeof question.options === 'string' ? JSON.parse(question.options) : question.options,
-        }));
-        setQuestions(parsedQuestions || []);
-      } catch (error: any) {
-        setMessage(error.message || 'Failed to fetch questions');
-      } finally {
-        setIsQuestionsLoading(false);
-      }
-    };
-
-    fetchQuestions();
-  }, [selectedExamId]);
-
-  // Register a single student
-  const handleRegisterStudent = async (e: React.FormEvent) => {
+  const register = (e: React.FormEvent) => {
     e.preventDefault();
-    setIsRegisterLoading(true);
-    setMessage('');
-
-    try {
-      const res = await fetch('/api/student', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: studentUsername,
-          password: studentPassword,
-          fullName: studentFullName || null,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage('Student registered successfully!');
-        setStudentUsername('');
-        setStudentPassword('');
-        setStudentFullName('');
-      } else {
-        setMessage(data.error || 'Error registering student');
-      }
-    } catch (error) {
-      setMessage('Failed to connect to the server. Please try again.');
-    } finally {
-      setIsRegisterLoading(false);
-    }
+    run(async () => {
+      const data = await api('/api/student', jsonInit('POST', form));
+      notify({ kind: 'success', text: data.message });
+      setForm({ username: '', password: '', fullName: '' });
+      await load();
+    });
   };
 
-  // Bulk register students
-  const handleBulkRegister = async (e: React.FormEvent) => {
+  const bulkUpload = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bulkFile) {
-      setMessage('Please upload a CSV file');
-      return;
-    }
-
-    setIsBulkLoading(true);
-    setMessage('');
-
-    const formData = new FormData();
-    formData.append('students', bulkFile);
-
-    try {
-      const res = await fetch('/api/student/bulk', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage(`Bulk registration successful! ${data.count} students added.`);
-        setBulkFile(null);
-        (document.getElementById('bulkFile') as HTMLInputElement).value = '';
-      } else {
-        setMessage(data.error || 'Error during bulk registration');
-      }
-    } catch (error) {
-      setMessage('Failed to connect to the server. Please try again.');
-    } finally {
-      setIsBulkLoading(false);
-    }
+    if (!bulkFile) return;
+    run(async () => {
+      const fd = new FormData();
+      fd.append('students', bulkFile);
+      const data = await api('/api/student/bulk', { method: 'POST', body: fd });
+      const skipped = data.details?.length
+        ? ` Skipped: ${data.details.slice(0, 5).map((d: { row: number; message: string }) => `row ${d.row} (${d.message})`).join('; ')}`
+        : '';
+      notify({ kind: 'success', text: data.message + skipped });
+      setBulkFile(null);
+      setBulkKey((k) => k + 1);
+      await load();
+    });
   };
 
-  // Create an exam
-  const handleCreateExam = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setMessage('');
-
-    if (!examTitle.trim()) {
-      setMessage('Exam title is required');
-      return;
-    }
-    if (!examDuration || parseInt(examDuration) <= 0) {
-      setMessage('Duration must be a positive number');
-      return;
-    }
-    if (!examFile) {
-      setMessage('Questions file is required');
-      return;
-    }
-
-    setIsExamLoading(true);
-
-    const formData = new FormData();
-    formData.append('title', examTitle);
-    formData.append('duration', examDuration);
-    formData.append('questions', examFile);
-
-    try {
-      const res = await fetch('/api/exams', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage('Exam created successfully!');
-        setExamTitle('');
-        setExamDuration('60');
-        setExamFile(null);
-        (document.getElementById('examFile') as HTMLInputElement).value = '';
-        // Refresh the exams list
-        const examsRes = await fetch('/api/exams');
-        if (examsRes.ok) {
-          const examsData = await examsRes.json();
-          setExams(examsData);
-        }
-      } else {
-        setMessage(data.error || 'Error creating exam');
-      }
-    } catch (error) {
-      setMessage('Failed to connect to the server. Please try again.');
-    } finally {
-      setIsExamLoading(false);
-    }
+  const remove = (s: Student) => {
+    if (!window.confirm(`Delete ${s.username}? Their scores will be deleted too.`)) return;
+    run(async () => {
+      await api('/api/student', jsonInit('DELETE', { username: s.username }));
+      notify({ kind: 'success', text: `${s.username} deleted.` });
+      await load();
+    });
   };
 
-  // Delete an exam
-  const handleDeleteExam = async (examId: number) => {
-    const confirmDelete = window.confirm('Are you sure you want to delete this exam? This will also delete associated scores.');
-    if (!confirmDelete) return;
-
-    setMessage('');
-
-    try {
-      const res = await fetch(`/api/exams/${examId}`, {
-        method: 'DELETE',
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage('Exam deleted successfully!');
-        setExams(exams.filter((exam) => exam.id !== examId));
-        if (selectedExamId === examId) {
-          setSelectedExamId(null);
-          setQuestions([]);
-        }
-      } else {
-        setMessage(data.error || 'Error deleting exam');
-      }
-    } catch (error) {
-      setMessage('Failed to delete exam. Please try again.');
-    }
+  const resetPassword = (s: Student) => {
+    const password = window.prompt(`New password for ${s.username}:`);
+    if (!password?.trim()) return;
+    run(async () => {
+      await api('/api/student', jsonInit('PATCH', { username: s.username, password }));
+      notify({ kind: 'success', text: `Password for ${s.username} updated.` });
+    });
   };
 
-  // Delete a question
-  const handleDeleteQuestion = async (questionId: number) => {
-    const confirmDelete = window.confirm('Are you sure you want to delete this question?');
-    if (!confirmDelete) return;
-
-    setMessage('');
-
-    try {
-      const res = await fetch(`/api/questions/${questionId}`, {
-        method: 'DELETE',
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage('Question deleted successfully!');
-        setQuestions(questions.filter((question) => question.id !== questionId));
-      } else {
-        setMessage(data.error || 'Error deleting question');
-      }
-    } catch (error) {
-      setMessage('Failed to delete question. Please try again.');
-    }
-  };
-
-  // Download scores
-  const handleDownloadScores = async () => {
-    setMessage('');
-    setIsDownloadLoading(true);
-
-    try {
-      const res = await fetch('/api/scores/download');
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Error downloading scores');
-      }
-
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'scores.csv';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-      setMessage('Scores downloaded successfully!');
-    } catch (error: any) {
-      setMessage(error.message || 'Error downloading scores');
-    } finally {
-      setIsDownloadLoading(false);
-    }
-  };
-
-  // Handle logout with confirmation
-  const handleLogout = () => {
-    const confirmLogout = window.confirm('Are you sure you want to log out?');
-    if (confirmLogout) {
-      setIsSidebarOpen(false);
-      window.location.href = '/admin/login'; // Placeholder logout
-    }
-  };
-
-  // Download sample CSV template for bulk registration
-  const handleDownloadBulkTemplate = () => {
-    const csvContent = 'username,password,fullName\nstudent1,pass123,John Doe\nstudent2,pass456,Jane Smith\n';
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'student_template.csv';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
-  };
-
-  // Sidebar navigation items with icons
-  const navItems = [
-    { id: 'register-student', label: 'Register Student', icon: <UserPlus size={20} /> },
-    { id: 'bulk-register', label: 'Bulk Register Students', icon: <Users size={20} /> },
-    { id: 'create-exam', label: 'Create Exam', icon: <FileText size={20} /> },
-    { id: 'manage-exams', label: 'Manage Exams', icon: <Edit size={20} /> },
-    { id: 'manage-questions', label: 'Manage Questions', icon: <Edit size={20} /> },
-    { id: 'view-scores', label: 'View Scores', icon: <Eye size={20} /> },
-    { id: 'download-scores', label: 'Download Scores', icon: <Download size={20} /> },
-  ];
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? students.filter((s) => s.username.toLowerCase().includes(q) || (s.fullName ?? '').toLowerCase().includes(q)) : students;
+  }, [students, search]);
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* Header */}
-      <header className="bg-blue-600 text-white p-6 shadow-md">
-        <div className="max-w-7xl mx-auto flex justify-between items-center">
-          <Link href="/" className="text-2xl font-bold hover:underline">
-            CBT Platform
-          </Link>
-          <nav className="hidden md:flex">
-            <Link href="/" className="text-lg hover:underline">
-              Home
-            </Link>
-          </nav>
-          {/* Hamburger Menu for Mobile */}
-          <button
-            className="md:hidden text-white focus:outline-none"
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-          >
-            {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
-          </button>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <div className="flex flex-1">
-        {/* Sidebar */}
-        <aside
-          className={`bg-gray-800 text-white w-64 p-6 space-y-4 fixed inset-y-0 left-0 transform ${
-            isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
-          } md:relative md:translate-x-0 transition-transform duration-300 ease-in-out z-20`}
-        >
-          <h2 className="text-xl font-semibold mb-6">Admin Menu</h2>
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => {
-                setActiveSection(item.id);
-                setIsSidebarOpen(false);
-              }}
-              className={`w-full flex items-center space-x-3 py-3 px-4 rounded-md transition duration-200 ${
-                activeSection === item.id
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-300 hover:bg-gray-700 hover:text-white'
-              }`}
-            >
-              {item.icon}
-              <span>{item.label}</span>
+    <div className="space-y-6">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card title="Register a student">
+          <form onSubmit={register} className="space-y-4">
+            <Field label="Username / Registration No.">
+              <input className={inputClass} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required />
+            </Field>
+            <Field label="Password">
+              <input className={inputClass} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required />
+            </Field>
+            <Field label="Full name (optional)">
+              <input className={inputClass} value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
+            </Field>
+            <button className={primaryBtn} disabled={busy}>
+              Register student
             </button>
-          ))}
-          {/* Logout Button */}
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center space-x-3 py-3 px-4 rounded-md text-gray-300 hover:bg-gray-700 hover:text-white transition duration-200"
-          >
-            <LogOut size={20} />
-            <span>Logout</span>
-          </button>
-        </aside>
+          </form>
+        </Card>
 
-        {/* Overlay for mobile sidebar */}
-        {isSidebarOpen && (
-          <div
-            className="fixed inset-0 bg-black opacity-50 md:hidden z-10"
-            onClick={() => setIsSidebarOpen(false)}
-          />
-        )}
-
-        {/* Main Content Area */}
-        <main className="flex-1 p-8">
-          <div className="max-w-4xl mx-auto">
-            <h1 className="text-4xl font-bold text-gray-800 mb-8 text-center">Admin Dashboard</h1>
-
-            {/* Register Student Section */}
-            {activeSection === 'register-student' && (
-              <div className="bg-white p-6 rounded-lg shadow-lg">
-                <h2 className="text-2xl font-semibold text-gray-700 mb-6">Register a Student</h2>
-                <form onSubmit={handleRegisterStudent} className="space-y-5">
-                  <div>
-                    <label htmlFor="studentUsername" className="block text-sm font-medium text-gray-600">
-                      Username
-                    </label>
-                    <input
-                      id="studentUsername"
-                      type="text"
-                      value={studentUsername}
-                      onChange={(e) => setStudentUsername(e.target.value)}
-                      className="mt-1 block w-full border border-gray-300 rounded-md p-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      required
-                      disabled={isRegisterLoading}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="studentPassword" className="block text-sm font-medium text-gray-600">
-                      Password
-                    </label>
-                    <input
-                      id="studentPassword"
-                      type="text"
-                      value={studentPassword}
-                      onChange={(e) => setStudentPassword(e.target.value)}
-                      className="mt-1 block w-full border border-gray-300 rounded-md p-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      required
-                      disabled={isRegisterLoading}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="studentFullName" className="block text-sm font-medium text-gray-600">
-                      Full Name (Optional)
-                    </label>
-                    <input
-                      id="studentFullName"
-                      type="text"
-                      value={studentFullName}
-                      onChange={(e) => setStudentFullName(e.target.value)}
-                      className="mt-1 block w-full border border-gray-300 rounded-md p-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      disabled={isRegisterLoading}
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    className={`w-full bg-blue-600 text-white px-4 py-3 rounded-md hover:bg-blue-700 transition duration-200 ${
-                      isRegisterLoading ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                    disabled={isRegisterLoading}
-                  >
-                    {isRegisterLoading ? 'Registering...' : 'Register Student'}
-                  </button>
-                </form>
-              </div>
-            )}
-
-            {/* Bulk Register Students Section */}
-            {activeSection === 'bulk-register' && (
-              <div className="bg-white p-6 rounded-lg shadow-lg">
-                <h2 className="text-2xl font-semibold text-gray-700 mb-6">Bulk Register Students</h2>
-                <form onSubmit={handleBulkRegister} className="space-y-5">
-                  <div>
-                    <label htmlFor="bulkFile" className="block text-sm font-medium text-gray-600">
-                      Upload Students CSV (username,password,fullName)
-                    </label>
-                    <input
-                      id="bulkFile"
-                      type="file"
-                      accept=".csv"
-                      onChange={(e) => setBulkFile(e.target.files?.[0] || null)}
-                      className="mt-1 block w-full border border-gray-300 rounded-md p-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      required
-                      disabled={isBulkLoading}
-                    />
-                    <p className="text-sm text-gray-500 mt-2">
-                      CSV format: username,password,fullName (fullName is optional)
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      <button
-                        type="button"
-                        onClick={handleDownloadBulkTemplate}
-                        className="text-blue-500 hover:underline"
-                      >
-                        Download sample CSV template
-                      </button>
-                    </p>
-                  </div>
-                  <button
-                    type="submit"
-                    className={`w-full bg-blue-600 text-white px-4 py-3 rounded-md hover:bg-blue-700 transition duration-200 ${
-                      isBulkLoading ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                    disabled={isBulkLoading}
-                  >
-                    {isBulkLoading ? 'Registering...' : 'Bulk Register'}
-                  </button>
-                </form>
-              </div>
-            )}
-
-            {/* Create Exam Section */}
-            {activeSection === 'create-exam' && (
-              <div className="bg-white p-6 rounded-lg shadow-lg">
-                <h2 className="text-2xl font-semibold text-gray-700 mb-6">Create Exam</h2>
-                <form onSubmit={handleCreateExam} className="space-y-5">
-                  <div>
-                    <label htmlFor="examTitle" className="block text-sm font-medium text-gray-600">
-                      Exam Title
-                    </label>
-                    <input
-                      id="examTitle"
-                      type="text"
-                      value={examTitle}
-                      onChange={(e) => setExamTitle(e.target.value)}
-                      className="mt-1 block w-full border border-gray-300 rounded-md p-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      required
-                      disabled={isExamLoading}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="examDuration" className="block text-sm font-medium text-gray-600">
-                      Duration (in minutes)
-                    </label>
-                    <input
-                      id="examDuration"
-                      type="number"
-                      value={examDuration}
-                      onChange={(e) => setExamDuration(e.target.value)}
-                      className="mt-1 block w-full border border-gray-300 rounded-md p-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      required
-                      min="1"
-                      disabled={isExamLoading}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="examFile" className="block text-sm font-medium text-gray-600">
-                      Upload Questions CSV (text,option1,option2,option3,option4,correct)
-                    </label>
-                    <input
-                      id="examFile"
-                      type="file"
-                      accept=".csv"
-                      onChange={(e) => setExamFile(e.target.files?.[0] || null)}
-                      className="mt-1 block w-full border border-gray-300 rounded-md p-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      required
-                      disabled={isExamLoading}
-                    />
-                    <p className="text-sm text-gray-500 mt-2">
-                      CSV format: text,option1,option2,option3,option4,correct (correct is the index 0-3)
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      <Link href="/sample-questions.csv" download className="text-blue-500 hover:underline">
-                        Download sample CSV template
-                      </Link>
-                    </p>
-                  </div>
-                  <button
-                    type="submit"
-                    className={`w-full bg-blue-600 text-white px-4 py-3 rounded-md hover:bg-blue-700 transition duration-200 ${
-                      isExamLoading ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                    disabled={isExamLoading}
-                  >
-                    {isExamLoading ? 'Creating...' : 'Create Exam'}
-                  </button>
-                </form>
-              </div>
-            )}
-
-            {/* Manage Exams Section */}
-            {activeSection === 'manage-exams' && (
-              <div className="bg-white p-6 rounded-lg shadow-lg">
-                <h2 className="text-2xl font-semibold text-gray-700 mb-6">Manage Exams</h2>
-                {isExamsLoading ? (
-                  <div className="flex items-center justify-center space-x-2">
-                    <div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                    <p className="text-gray-600">Loading exams...</p>
-                  </div>
-                ) : exams.length === 0 ? (
-                  <p className="text-gray-600 text-center">No exams available.</p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Title
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Duration (min)
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Questions
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {exams.map((exam) => (
-                          <tr key={exam.id}>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {exam.title}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {exam.duration}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {exam.questions.length}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm">
-                              <button
-                                onClick={() => handleDeleteExam(exam.id)}
-                                className="text-red-600 hover:text-red-800 transition duration-200"
-                              >
-                                <Trash2 size={18} />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Manage Questions Section */}
-            {activeSection === 'manage-questions' && (
-              <div className="bg-white p-6 rounded-lg shadow-lg">
-                <h2 className="text-2xl font-semibold text-gray-700 mb-6">Manage Questions</h2>
-                <div className="mb-6">
-                  <label htmlFor="examSelect" className="block text-sm font-medium text-gray-600 mb-2">
-                    Select Exam
-                  </label>
-                  <select
-                    id="examSelect"
-                    value={selectedExamId || ''}
-                    onChange={(e) => setSelectedExamId(e.target.value ? parseInt(e.target.value) : null)}
-                    className="block w-full border border-gray-300 rounded-md p-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  >
-                    <option value="">-- Select an Exam --</option>
-                    {exams.map((exam) => (
-                      <option key={exam.id} value={exam.id}>
-                        {exam.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {selectedExamId === null ? (
-                  <p className="text-gray-600 text-center">Please select an exam to view its questions.</p>
-                ) : isQuestionsLoading ? (
-                  <div className="flex items-center justify-center space-x-2">
-                    <div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                    <p className="text-gray-600">Loading questions...</p>
-                  </div>
-                ) : questions.length === 0 ? (
-                  <p className="text-gray-600 text-center">No questions available for this exam.</p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Question Text
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Options
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Correct Answer
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {questions.map((question) => (
-                          <tr key={question.id}>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {question.text}
-                            </td>
-                            <td className="px-6 py-4 text-sm text-gray-900">
-                              {Array.isArray(question.options) ? question.options.join(', ') : 'N/A'}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {question.correct !== undefined ? question.options[question.correct] : 'N/A'}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm">
-                              <button
-                                onClick={() => handleDeleteQuestion(question.id)}
-                                className="text-red-600 hover:text-red-800 transition duration-200"
-                              >
-                                <Trash2 size={18} />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* View Scores Section */}
-            {activeSection === 'view-scores' && (
-              <div className="bg-white p-6 rounded-lg shadow-lg text-center">
-                <h2 className="text-2xl font-semibold text-gray-700 mb-6">View Scores</h2>
-                <Link href="/admin/scores">
-                  <button className="w-full bg-blue-600 text-white px-4 py-3 rounded-md hover:bg-blue-700 transition duration-200">
-                    Go to Scores Page
-                  </button>
-                </Link>
-              </div>
-            )}
-
-            {/* Download Scores Section */}
-            {activeSection === 'download-scores' && (
-              <div className="bg-white p-6 rounded-lg shadow-lg text-center">
-                <h2 className="text-2xl font-semibold text-gray-700 mb-6">Download Scores</h2>
-                <button
-                  onClick={handleDownloadScores}
-                  className={`w-full flex items-center justify-center space-x-2 bg-blue-600 text-white px-4 py-3 rounded-md hover:bg-blue-700 transition duration-200 ${
-                    isDownloadLoading ? 'opacity-50 cursor-not-allowed' : ''
-                  }`}
-                  disabled={isDownloadLoading}
-                >
-                  {isDownloadLoading ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      <span>Downloading...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Download size={20} />
-                      <span>Download Scores as CSV</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            )}
-
-            {message && (
-              <p
-                className={`text-sm text-center mt-6 ${
-                  message.includes('successfully') ? 'text-green-600' : 'text-red-600'
-                }`}
-              >
-                {message}
-              </p>
-            )}
-          </div>
-        </main>
+        <Card title="Bulk register (CSV)">
+          <form onSubmit={bulkUpload} className="space-y-4">
+            <p className="text-sm text-gray-600">
+              Columns: <code className="rounded bg-gray-100 px-1">username</code>, <code className="rounded bg-gray-100 px-1">password</code>,{' '}
+              <code className="rounded bg-gray-100 px-1">fullName</code> (optional). Existing usernames get their password updated.{' '}
+              <a href="/sample-students.csv" download className="text-emerald-700 underline">
+                Download sample
+              </a>
+            </p>
+            <input
+              key={bulkKey}
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => setBulkFile(e.target.files?.[0] ?? null)}
+              className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-emerald-50 file:px-3 file:py-2 file:text-emerald-800"
+            />
+            <button className={primaryBtn} disabled={busy || !bulkFile}>
+              {busy ? 'Uploading...' : 'Upload students'}
+            </button>
+          </form>
+        </Card>
       </div>
 
-      {/* Footer */}
-      <footer className="bg-gray-800 text-white p-4">
-        <div className="max-w-7xl mx-auto text-center">
-          <p className="text-sm">
-            © {new Date().getFullYear()} CBT Platform. All rights reserved.
-          </p>
+      <Card
+        title={`Students (${students.length})`}
+        action={<input className={`${inputClass} !mt-0 max-w-xs`} placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} />}
+      >
+        {loading ? (
+          <Spinner />
+        ) : shown.length === 0 ? (
+          <p className="py-6 text-center text-sm text-gray-500">No students found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-100">
+              <thead>
+                <tr>
+                  <Th>Username</Th>
+                  <Th>Full name</Th>
+                  <Th>Exams taken</Th>
+                  <Th>Registered</Th>
+                  <Th />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {shown.map((s) => (
+                  <tr key={s.id}>
+                    <Td className="font-medium">{s.username}</Td>
+                    <Td>{s.fullName || '-'}</Td>
+                    <Td>{s._count.scores}</Td>
+                    <Td>{fmtDate(s.createdAt)}</Td>
+                    <Td className="space-x-2 whitespace-nowrap text-right">
+                      <button onClick={() => resetPassword(s)} disabled={busy} className="inline-flex items-center gap-1 text-sm text-emerald-700 hover:underline">
+                        <KeyRound size={14} /> Reset password
+                      </button>
+                      <button onClick={() => remove(s)} disabled={busy} className={dangerBtn}>
+                        <Trash2 size={14} /> Delete
+                      </button>
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ------------------------------- Exams ------------------------------- */
+
+function ExamsTab({ notify }: { notify: (n: Notice) => void }) {
+  const api = useApi();
+  const [exams, setExams] = useState<Exam[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [title, setTitle] = useState('');
+  const [duration, setDuration] = useState('60');
+  const [file, setFile] = useState<File | null>(null);
+  const [fileKey, setFileKey] = useState(0);
+  const [openExam, setOpenExam] = useState<{ id: number; title: string; questions: Question[] } | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setExams(await api('/api/exams'));
+    } catch (e) {
+      notify({ kind: 'error', text: errMsg(e) });
+    } finally {
+      setLoading(false);
+    }
+  }, [api, notify]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    notify(null);
+    try {
+      await fn();
+    } catch (e) {
+      notify({ kind: 'error', text: errMsg(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const create = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!file) return;
+    run(async () => {
+      const fd = new FormData();
+      fd.append('title', title);
+      fd.append('duration', duration);
+      fd.append('questions', file);
+      const data = await api('/api/exams', { method: 'POST', body: fd });
+      notify({ kind: 'success', text: `${data.exam.title} created with ${data.exam._count.questions} questions.` });
+      setTitle('');
+      setFile(null);
+      setFileKey((k) => k + 1);
+      await load();
+    });
+  };
+
+  const view = (exam: Exam) =>
+    run(async () => {
+      const data = await api(`/api/exams/${exam.id}`);
+      setOpenExam({ id: exam.id, title: exam.title, questions: data.questions });
+    });
+
+  const removeExam = (exam: Exam) => {
+    if (!window.confirm(`Delete "${exam.title}" with all its questions and ${exam._count.scores} score(s)? This cannot be undone.`)) return;
+    run(async () => {
+      await api(`/api/exams/${exam.id}`, { method: 'DELETE' });
+      notify({ kind: 'success', text: `"${exam.title}" deleted.` });
+      if (openExam?.id === exam.id) setOpenExam(null);
+      await load();
+    });
+  };
+
+  const removeQuestion = (q: Question) => {
+    if (!window.confirm('Delete this question?')) return;
+    run(async () => {
+      await api(`/api/questions/${q.id}`, { method: 'DELETE' });
+      setOpenExam((o) => (o ? { ...o, questions: o.questions.filter((x) => x.id !== q.id) } : o));
+      await load();
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card title="Create an exam">
+        <form onSubmit={create} className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-[1fr_160px]">
+            <Field label="Exam title">
+              <input className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} required />
+            </Field>
+            <Field label="Duration (minutes)">
+              <input type="number" min={1} max={600} className={inputClass} value={duration} onChange={(e) => setDuration(e.target.value)} required />
+            </Field>
+          </div>
+          <div>
+            <p className="mb-1 text-sm font-medium text-gray-700">Questions file (CSV)</p>
+            <p className="mb-2 text-sm text-gray-600">
+              Columns: <code className="rounded bg-gray-100 px-1">text</code>, <code className="rounded bg-gray-100 px-1">option1</code> ...{' '}
+              <code className="rounded bg-gray-100 px-1">option4</code> (up to 6), <code className="rounded bg-gray-100 px-1">correct</code>. The{' '}
+              <code className="rounded bg-gray-100 px-1">correct</code> value is the <strong>zero-based</strong> position of the right option (0 = option1, 1 = option2, ...).{' '}
+              <a href="/sample-questions.csv" download className="text-emerald-700 underline">
+                Download sample
+              </a>
+            </p>
+            <input
+              key={fileKey}
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-emerald-50 file:px-3 file:py-2 file:text-emerald-800"
+              required
+            />
+          </div>
+          <button className={primaryBtn} disabled={busy || !file}>
+            {busy ? 'Working...' : 'Create exam'}
+          </button>
+        </form>
+      </Card>
+
+      <Card title={`Exams (${exams.length})`}>
+        {loading ? (
+          <Spinner />
+        ) : exams.length === 0 ? (
+          <p className="py-6 text-center text-sm text-gray-500">No exams yet. Create one above.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-100">
+              <thead>
+                <tr>
+                  <Th>Title</Th>
+                  <Th>Duration</Th>
+                  <Th>Questions</Th>
+                  <Th>Submissions</Th>
+                  <Th>Created</Th>
+                  <Th />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {exams.map((x) => (
+                  <tr key={x.id}>
+                    <Td className="font-medium">{x.title}</Td>
+                    <Td>{x.duration} min</Td>
+                    <Td>{x._count.questions}</Td>
+                    <Td>{x._count.scores}</Td>
+                    <Td>{fmtDate(x.createdAt)}</Td>
+                    <Td className="space-x-2 whitespace-nowrap text-right">
+                      <button onClick={() => view(x)} disabled={busy} className="text-sm text-emerald-700 hover:underline">
+                        View questions
+                      </button>
+                      <button onClick={() => removeExam(x)} disabled={busy} className={dangerBtn}>
+                        <Trash2 size={14} /> Delete
+                      </button>
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {openExam && (
+        <Card
+          title={`Questions: ${openExam.title} (${openExam.questions.length})`}
+          action={
+            <button onClick={() => setOpenExam(null)} className="text-sm text-gray-500 hover:underline">
+              Close
+            </button>
+          }
+        >
+          <ol className="space-y-4">
+            {openExam.questions.map((q, i) => (
+              <li key={q.id} className="rounded-md border border-gray-200 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="font-medium text-gray-900">
+                    {i + 1}. {q.text}
+                  </p>
+                  <button onClick={() => removeQuestion(q)} disabled={busy} className={dangerBtn}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+                <ul className="mt-2 space-y-1 text-sm">
+                  {q.options.map((o, j) => (
+                    <li key={j} className={j === q.correct ? 'font-semibold text-emerald-700' : 'text-gray-600'}>
+                      {String.fromCharCode(65 + j)}. {o} {j === q.correct && '(correct)'}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ol>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------- Scores ------------------------------- */
+
+function ScoresTab({ notify }: { notify: (n: Notice) => void }) {
+  const api = useApi();
+  const [scores, setScores] = useState<Score[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [examFilter, setExamFilter] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setScores(await api('/api/scores'));
+    } catch (e) {
+      notify({ kind: 'error', text: errMsg(e) });
+    } finally {
+      setLoading(false);
+    }
+  }, [api, notify]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const examTitles = useMemo(() => Array.from(new Set(scores.map((s) => s.exam.title))).sort(), [scores]);
+  const shown = examFilter ? scores.filter((s) => s.exam.title === examFilter) : scores;
+
+  const allowRetake = async (s: Score) => {
+    if (!window.confirm(`Remove ${s.student.username}'s score for "${s.exam.title}" so they can retake it?`)) return;
+    setBusy(true);
+    notify(null);
+    try {
+      const data = await api(`/api/scores/${s.id}`, { method: 'DELETE' });
+      notify({ kind: 'success', text: data.message });
+      await load();
+    } catch (e) {
+      notify({ kind: 'error', text: errMsg(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card
+      title={`Scores (${shown.length})`}
+      action={
+        <div className="flex flex-wrap items-center gap-3">
+          <select className={`${inputClass} !mt-0 max-w-[14rem]`} value={examFilter} onChange={(e) => setExamFilter(e.target.value)} aria-label="Filter by exam">
+            <option value="">All exams</option>
+            {examTitles.map((t) => (
+              <option key={t}>{t}</option>
+            ))}
+          </select>
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+          <a href="/api/scores/download" className={primaryBtn}>
+            <Download size={16} /> Download CSV
+          </a>
         </div>
-      </footer>
+      }
+    >
+      {loading ? (
+        <Spinner />
+      ) : shown.length === 0 ? (
+        <p className="py-6 text-center text-sm text-gray-500">No scores recorded yet.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-100">
+            <thead>
+              <tr>
+                <Th>Student</Th>
+                <Th>Name</Th>
+                <Th>Exam</Th>
+                <Th>Correct</Th>
+                <Th>Score</Th>
+                <Th>Date</Th>
+                <Th />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {shown.map((s) => (
+                <tr key={s.id}>
+                  <Td className="font-medium">{s.student.username}</Td>
+                  <Td>{s.student.fullName || '-'}</Td>
+                  <Td>{s.exam.title}</Td>
+                  <Td>
+                    {s.correct}/{s.total}
+                  </Td>
+                  <Td className={`font-semibold ${s.score >= 50 ? 'text-emerald-700' : 'text-red-600'}`}>{s.score.toFixed(1)}%</Td>
+                  <Td>{fmtDate(s.createdAt)}</Td>
+                  <Td className="text-right">
+                    <button onClick={() => allowRetake(s)} disabled={busy} className="inline-flex items-center gap-1 text-sm text-emerald-700 hover:underline">
+                      <RotateCcw size={14} /> Allow retake
+                    </button>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ------------------------------ Dashboard ------------------------------ */
+
+export default function AdminDashboard() {
+  const router = useRouter();
+  const [tab, setTab] = useState<TabId>('students');
+  const [notice, setNotice] = useState<Notice>(null);
+
+  const switchTab = (id: TabId) => {
+    setNotice(null);
+    setTab(id);
+  };
+
+  const logout = async () => {
+    await fetch('/api/admin/logout', { method: 'POST' });
+    router.push('/admin/login');
+    router.refresh();
+  };
+
+  return (
+    <div className="flex min-h-screen flex-col">
+      <Header>
+        <span className="hidden text-sm text-emerald-50 sm:inline">Administrator</span>
+        <button onClick={logout} className="flex items-center gap-1.5 text-sm hover:underline">
+          <LogOut size={16} /> Logout
+        </button>
+      </Header>
+
+      <div className="border-b bg-white">
+        <nav className="mx-auto flex max-w-6xl gap-1 overflow-x-auto px-4" aria-label="Admin sections">
+          {tabs.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => switchTab(id)}
+              className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium ${
+                tab === id ? 'border-emerald-700 text-emerald-800' : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Icon size={16} /> {label}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      <main className="mx-auto w-full max-w-6xl flex-1 space-y-4 px-4 py-6">
+        {notice && <Alert kind={notice.kind}>{notice.text}</Alert>}
+        {tab === 'students' && <StudentsTab notify={setNotice} />}
+        {tab === 'exams' && <ExamsTab notify={setNotice} />}
+        {tab === 'scores' && <ScoresTab notify={setNotice} />}
+      </main>
+      <Footer />
     </div>
   );
 }

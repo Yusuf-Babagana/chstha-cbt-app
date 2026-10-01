@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CBT Portal - College of Health and Environmental Sciences, Funtua
 
-## Getting Started
+A computer-based testing (CBT) web app: students sit timed multiple-choice exams and get instant results; exam officers manage students, exams and scores from an admin dashboard.
 
-First, run the development server:
+Built with Next.js 15, React 19, Tailwind CSS 4, Prisma and SQLite.
+
+## Quick start (any computer)
+
+Requirements: [Node.js 20+](https://nodejs.org) and Git.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone <repo-url>
+cd chstha-cbt-app
+npm install
+npm run setup     # creates .env, the database, and demo data
+npm run dev       # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`npm run setup` copies `.env.example` to `.env` (with a freshly generated `AUTH_SECRET`), applies the database migrations and seeds a demo student and sample exam.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+**Before real use, open `.env` and change `ADMIN_PASSWORD`.**
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Role    | URL                    | Default login                |
+| ------- | ---------------------- | ---------------------------- |
+| Admin   | `/admin/login`         | `admin` / `ChangeMe@2025` (from `.env`) |
+| Student | `/student/login`       | `student1` / `password123` (demo account - delete it before going live) |
 
-## Learn More
+## Using the admin dashboard
 
-To learn more about Next.js, take a look at the following resources:
+- **Students** - register one at a time, or upload a CSV (`username,password,fullName`; see `public/sample-students.csv`). Passwords are stored hashed. You can reset passwords and delete students.
+- **Exams** - upload a CSV (`text,option1..option4,correct`; see `public/sample-questions.csv`). `correct` is the **zero-based** index of the right option (`0` = option1). Each CSV row is validated and problems are reported with row numbers.
+- **Scores** - filter by exam, download all results as CSV, or remove a score to let a student retake an exam.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## How exams work
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- Questions are shuffled per student. The answer key is never sent to the browser.
+- The countdown is based on the server start time, so refreshing or switching device does not reset the clock.
+- Answers autosave while the student works; if time runs out the saved answers are submitted automatically.
+- Each student can take each exam once, until an admin removes their score.
 
-## Deploy on Vercel
+## Configuration (`.env`)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Variable         | Purpose                                              |
+| ---------------- | ---------------------------------------------------- |
+| `DATABASE_URL`   | SQLite file, default `file:./dev.db`                 |
+| `ADMIN_USERNAME` | Admin login name                                     |
+| `ADMIN_PASSWORD` | Admin password - change it                           |
+| `AUTH_SECRET`    | Random string used to sign login cookies             |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Production / exam-day deployment
+
+```bash
+npm run build
+npm start          # http://localhost:3000
+```
+
+For a lab network, run it on one machine and have the others open `http://<that-machine's-IP>:3000`. If you serve it over plain HTTP (no HTTPS), add `INSECURE_COOKIES=true` to `.env`, otherwise browsers will refuse to keep the login cookie in production mode.
+
+Back up `prisma/dev.db` regularly - it holds all students, exams and scores.
+
+## Useful commands
+
+| Command            | What it does                                    |
+| ------------------ | ----------------------------------------------- |
+| `npm run dev`      | Development server                              |
+| `npm run build`    | Production build                                |
+| `npm run lint`     | Lint the code                                   |
+| `npm run db:seed`  | Re-run the demo seed                            |
+| `npm run db:reset` | **Erase** the database and recreate it          |

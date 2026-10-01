@@ -1,3 +1,4 @@
 text,option1,option2,option3,option4,correct
-"What is 2+2?","3","4","5","6",1
-"What is the capital of France?","Germany","Italy","France","Spain",2
+Which organ pumps blood around the human body?,Liver,Heart,Kidney,Lung,1
+Which vitamin deficiency causes scurvy?,Vitamin A,Vitamin B12,Vitamin C,Vitamin D,2
+Safe disposal of waste is an important part of:,Environmental health,Astronomy,Banking,Aviation,0

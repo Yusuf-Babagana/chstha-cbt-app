@@ -1,85 +1,55 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { parse } from 'csv-parse/sync';
+import { getAdmin, serverError, unauthorized } from '@/lib/auth';
+import { hashPassword } from '@/lib/password';
+import { parseStudentsCsv } from '@/lib/csv';
 
 export async function POST(request: Request) {
+  if (!(await getAdmin())) return unauthorized();
   try {
-    const formData = await request.formData();
-    const file = formData.get('students') as File;
+    const file = (await request.formData()).get('students');
+    if (!(file instanceof File)) {
+      return NextResponse.json({ error: 'Students CSV file is required' }, { status: 400 });
+    }
 
-    // Log the received file for debugging
-    console.log('Received File:', file?.name);
-
-    if (!file) {
+    let parsed;
+    try {
+      parsed = parseStudentsCsv(await file.text());
+    } catch {
+      return NextResponse.json({ error: 'Could not read the CSV file. Check that it is a valid CSV.' }, { status: 400 });
+    }
+    const { students, errors } = parsed;
+    if (students.length === 0) {
       return NextResponse.json(
-        { error: 'Students CSV file is required' },
+        { error: 'No valid students found. Required columns: username, password (fullName optional).', details: errors },
         { status: 400 }
       );
     }
 
-    // Read and parse the CSV file
-    const csvText = await file.text();
-    const records = parse(csvText, {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-    });
-
-    if (records.length === 0) {
-      return NextResponse.json(
-        { error: 'CSV file is empty or invalid' },
-        { status: 400 }
-      );
-    }
-
-    // Validate CSV headers
-    const requiredHeaders = ['username', 'password']; // fullName is optional
-    const headers = Object.keys(records[0]);
-    const missingHeaders = requiredHeaders.filter((header) => !headers.includes(header));
-    if (missingHeaders.length > 0) {
-      return NextResponse.json(
-        { error: `Missing required CSV headers: ${missingHeaders.join(', ')}` },
-        { status: 400 }
-      );
-    }
-
-    // Parse students from CSV
-    const students = records.map((record: any) => {
-      if (!record.username || !record.password) {
-        throw new Error('Username and password must be provided for each student');
+    let created = 0;
+    let updated = 0;
+    for (const s of students) {
+      const password = await hashPassword(s.password);
+      const existing = await prisma.student.findUnique({ where: { username: s.username }, select: { id: true } });
+      if (existing) {
+        await prisma.student.update({
+          where: { id: existing.id },
+          data: { password, ...(s.fullName ? { fullName: s.fullName } : {}) },
+        });
+        updated++;
+      } else {
+        await prisma.student.create({ data: { username: s.username, password, fullName: s.fullName } });
+        created++;
       }
-
-      return {
-        username: record.username,
-        password: record.password,
-        fullName: record.fullName || null, // fullName is optional
-      };
-    });
-
-    // Create or update students in the database
-    const createdStudents = [];
-    for (const student of students) {
-      const newStudent = await prisma.student.upsert({
-        where: { username: student.username },
-        update: {
-          password: student.password,
-          fullName: student.fullName,
-        },
-        create: {
-          username: student.username,
-          password: student.password,
-          fullName: student.fullName,
-        },
-      });
-      createdStudents.push(newStudent);
     }
-
-    return NextResponse.json(
-      { message: 'Students registered successfully', count: createdStudents.length },
-      { status: 200 }
-    );
-  } catch (error: any) {
-    console.error('Bulk register students error:', error.message);
-    return NextResponse.json({ error: error.message || 'Error registering students' }, { status: 500 });
+    const skipped = errors.length ? `, ${errors.length} row(s) skipped` : '';
+    return NextResponse.json({
+      message: `${created} student(s) created, ${updated} updated${skipped}.`,
+      created,
+      updated,
+      details: errors,
+    });
+  } catch (e) {
+    return serverError('Bulk register error', e, 'Error registering students');
   }
 }
